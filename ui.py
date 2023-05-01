@@ -6,21 +6,48 @@ import time
 import mimetypes
 from PIL import ImageTk, Image
 import requests
+import io
 from io import BytesIO
 from http.server import HTTPServer
 from http.server import BaseHTTPRequestHandler
 import sys
 from pyramid.config import Configurator
+from pyramid.renderers import render_to_response
 import os
 import time
 import threading
 import socket
+import ssl
+from ssl import SSLContext
+from ssl import PROTOCOL_SSLv23
+from requests.auth import HTTPBasicAuth
+from pychromecast.controllers.receiver import CastStatus
 
 # Beginning
 window = tk.Tk()
 urlVar = tk.StringVar()
 ctVar = tk.StringVar()
 pathVar = tk.StringVar()
+secs= tk.IntVar()
+
+
+with open('list.txt') as f:
+    ips = f.readlines()
+ips_list = []
+if len(ips) > 0:
+    for ip in ips:
+        ips_list.append(str(ip))
+
+
+
+chromecasts, browser = pychromecast.get_listed_chromecasts(
+    friendly_names=["ColdwellDisp"]
+)
+browser.stop_discovery()
+
+def load(file):
+    with open(file, 'rb') as file:
+        return file.read()
 
 
 def getURL():
@@ -28,9 +55,9 @@ def getURL():
     try:
         # doesn't even have to be reachable
         s.connect(('192.255.255.255', 1))
-        IP = s.getsockname()[0]
+        IP = s.getsockname()[0]   
     except:
-        IP = '127.0.0.1'
+            IP = '127.0.0.1'
     finally:
         s.close()
     return IP
@@ -38,86 +65,70 @@ def getURL():
 
 def img_paths():
     """Display images."""
-
+    import requests
+    
     image_paths = []
+    image_links = []
     for r, d, fs in os.walk(os.getcwd() + "/images"):
         for f in fs:
             _p = os.path.join(r, f)
             _f = _p.replace(os.getcwd() + "/images", '').lstrip('/')
             image_paths.append(os.path.join('images', _f))
-    return image_paths
+            image = Image.open(os.getcwd()+"/images/"+f)
+            buf = io.BytesIO()
+            new_image = image.rotate(90)
+            new_image.save(buf, format('JPEG'))
+            payload = {'key': '6d207e02198a847aa98d0a2a901485a5','action': 'upload', }
+            x = requests.post("https://freeimage.host/api/1/upload", payload, files={"source": buf.getvalue()})
+            import json
+            data = json.loads(x.text)
+            image_links.append(data["image"]["url"])
+    print(image_links)
+    return image_links
+    
+def stop():
+     for ip in ips_list:
+        ip.replace(" ", "")
+        os.system("./rust_caster" +" "+"-a "+ip+" --stop-current")
 
-
-def slideshow(paths):
-    url = getURL()
+def slideshow():
+    paths = img_paths()
+    
     for i in paths:
-        send_slide(url+":8000"+"/"+i)
-        time.sleep(45)
+        send_slide(i)
+        time.sleep(secs.get()*15)
+        
+def comand_rust(ip, url):
+    os.system("./rust_caster" +" "+"-a "+ip+" -m "+ url)
 
 def send_slide(url):
-    chromecasts, browser = pychromecast.get_listed_chromecasts(
-        friendly_names=["ColdwellDisp"]
-    )
-    ctVar.set(mimetypes.guess_type(urlVar.get()))
-    for i in chromecasts:
-        i.wait()
-        mc = i.media_controller
-        mc.play_media(url, ctVar.get(), autoplay=True)
-        mc.block_until_active()
-        mc.play()
-        print(mc.status)
-    browser.stop_discovery()
-    ctVar.set("")
-
-def run():
-    HandlerClass = BaseHTTPRequestHandler
-    ServerClass = HTTPServer
-    Protocol = "HTTP/1.0"
-
-    if sys.argv[1:]:
-        port = int(sys.argv[1])
+    if ".jpg" in urlVar.get():
+        ctVar.set("image/jpg")
     else:
-        port = 8000
-        server_address = (getURL(), port)
-
-    config = Configurator()
-    paths = img_paths()
-
-    for i in paths:
-        config.add_route(i, "/"+i)
-
-    HandlerClass.protocol_version = Protocol
-    httpd = ServerClass(server_address, HandlerClass)
-
-    sa = httpd.socket.getsockname()
-    print("Serving HTTP on", sa[0], "port", sa[1], "...")
-    httpd.serve_forever()
+        ctVar.set(mimetypes.guess_type(url))     
+    
+    for ip in ips_list:
+        ip.replace(" ", "")
+        print("./rust_caster" +" "+"-a "+ip+" -m "+ url)
+        x = threading.Thread(target=comand_rust, args=(ip,url,))
+        x.start()
+    ctVar.set("")
 
 
 def send(url):
+    if ".jpg" in urlVar.get():
+        ctVar.set("image/jpg")
     chromecasts, browser = pychromecast.get_listed_chromecasts(
         friendly_names=["ColdwellDisp"]
     )
-    ctVar.set(mimetypes.guess_type(urlVar.get()))
-    for i in chromecasts:
-        i.wait()
-        mc = i.media_controller
-        mc.play_media(urlVar.get(), ctVar.get(), autoplay=True)
-        mc.block_until_active()
-        mc.play()
-        print(mc.status)
-    browser.stop_discovery()
+    for ip in ips_list:
+        ip.replace(" ", "")
+        os.system("./rust_caster" +" "+"-a "+ip+" -m "+ urlVar.get())
+        
+    
     urlVar.set("")
     ctVar.set("")
 # 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4', 'video/mp4')
-
-
-chromecasts, browser = pychromecast.get_listed_chromecasts(
-    friendly_names=["ColdwellDisp"]
-)
-for i in chromecasts:
-    i.wait()
-browser.stop_discovery()
 
 numOfDevices = len(chromecasts)
 
@@ -146,18 +157,24 @@ labelDNUM = tk.Label(window, text=numOfDevices).grid(row=3, column=0)
 label1 = tk.Label(canvas, text="Media URL").grid(row=1, column=0)
 u1 = tk.Entry(canvas, textvariable=urlVar).grid(row=1, column=1)
 
-x = threading.Thread(target=run)
-x.start()
-
-paths = img_paths()
 
 def items(): return send(u1)
+
+
 tk.Button(canvas, text="Send to Displays", command=items).grid()
 tk.Label(canvas, text="Or").grid()
 
 
-def images(): return slideshow(paths)
 
+def images():
+    run = True
+    while (run == True):
+        slideshow()
+
+tk.Spinbox(canvas, from_=1, to=100,textvariable=secs).grid()
 tk.Button(canvas, text="Play Slide Show", command=images).grid()
+def pause(): return stop()
+
+tk.Button(window, text="stop", command=pause())
 
 window.mainloop()
